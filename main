@@ -1,0 +1,178 @@
+import pygame
+import sys
+import os
+import random
+
+pygame.init()
+pygame.mixer.init()
+
+WIDTH, HEIGHT = 800, 600
+GRID_SIZE = 40
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Rat Attack - TERRA Game")
+
+BG_DARK = (25, 20, 20)
+BG_LIGHT = (35, 28, 28)
+RAT_GRAY = (120, 120, 120)
+PINK = (255, 182, 193)
+WHITE = (255, 255, 255)
+CHEESE_YELLOW = (255, 255, 102)
+
+clock = pygame.time.Clock()
+font = pygame.font.SysFont("monospace", 28, bold=True)
+big_font = pygame.font.SysFont("monospace", 48, bold=True)
+
+def load_tile(filename):
+    if os.path.exists(filename):
+        try:
+            raw_img = pygame.image.load(filename).convert_alpha()
+            raw_img.set_colorkey((255, 255, 255))
+            return pygame.transform.scale(raw_img, (GRID_SIZE, GRID_SIZE)), True
+        except pygame.error:
+            return None, False
+    return None, False
+
+CHEESE_IMG, HAS_CHEESE_IMG = load_tile("cheese.png")
+MOUSE_IMG, HAS_MOUSE_IMG   = load_tile("mouse.png")
+BODY_IMG, HAS_BODY_IMG     = load_tile("body.png")
+TAIL_IMG, HAS_TAIL_IMG     = load_tile("tail.png")
+
+HAS_FULL_BG, HAS_TILE_BG = False, False
+if os.path.exists("background.png"):
+    raw_bg = pygame.image.load("background.png").convert()
+    BG_IMG = pygame.transform.scale(raw_bg, (WIDTH, HEIGHT))
+    HAS_FULL_BG = True
+elif os.path.exists("tile.png"):
+    TILE_IMG, HAS_TILE_BG = load_tile("tile.png")
+
+def draw_background():
+    if HAS_FULL_BG:
+        screen.blit(BG_IMG, (0, 0))
+    elif HAS_TILE_BG:
+        for row in range(0, HEIGHT // GRID_SIZE):
+            for col in range(0, WIDTH // GRID_SIZE):
+                screen.blit(TILE_IMG, (col * GRID_SIZE, row * GRID_SIZE))
+    else:
+        for row in range(0, HEIGHT // GRID_SIZE):
+            for col in range(0, WIDTH // GRID_SIZE):
+                color = BG_DARK if (row + col) % 2 == 0 else BG_LIGHT
+                pygame.draw.rect(screen, color, (col * GRID_SIZE, row * GRID_SIZE, GRID_SIZE, GRID_SIZE))
+
+def draw_cheese(pos):
+    if HAS_CHEESE_IMG:
+        screen.blit(CHEESE_IMG, (pos[0], pos[1]))
+    else:
+        pygame.draw.rect(screen, CHEESE_YELLOW, (pos[0], pos[1], GRID_SIZE, GRID_SIZE))
+
+def draw_rat(rat, direction):
+    if len(rat) > 1:
+        tail_pos = rat[-1]
+        second_last = rat[-2]
+        
+        dx = tail_pos[0] - second_last[0]
+        dy = tail_pos[1] - second_last[1]
+        
+        if HAS_TAIL_IMG:
+            rot_body = pygame.transform.flip(BODY_IMG, True, False)
+            
+            if dx > 0:
+                rot_tail = TAIL_IMG
+            elif dx < 0:
+                rot_tail = pygame.transform.rotate(TAIL_IMG, 180)
+            elif dy < 0:
+                rot_tail = pygame.transform.rotate(TAIL_IMG, 90)
+            else:
+                rot_tail = pygame.transform.rotate(TAIL_IMG, 270)
+            screen.blit(rot_tail, (tail_pos[0], tail_pos[1]))
+        else:
+            tx, ty = tail_pos[0] + GRID_SIZE // 2, tail_pos[1] + GRID_SIZE // 2
+            pygame.draw.line(screen, PINK, (tx, ty), (tx + dx // 2, ty + dy // 2), 5)
+
+    for i in range(1, len(rat) - 1):
+        segment = rat[i]
+        prev_segment = rat[i - 1]
+        
+        if HAS_BODY_IMG:
+            seg_dy = prev_segment[1] - segment[1]
+            if seg_dy != 0:
+                rot_body = pygame.transform.flip(BODY_IMG, True, False)
+                rot_body = pygame.transform.rotate(BODY_IMG, 270)
+            else:
+                rot_body = BODY_IMG
+            screen.blit(rot_body, (segment[0], segment[1]))
+        else:
+            cx, cy = segment[0] + GRID_SIZE // 2, segment[1] + GRID_SIZE // 2
+            pygame.draw.circle(screen, RAT_GRAY, (cx, cy), GRID_SIZE // 2 - 2)
+
+    hx, hy = rat[0][0], rat[0][1]
+    if HAS_MOUSE_IMG:
+        if direction == (-GRID_SIZE, 0):
+            rot_head = MOUSE_IMG
+        elif direction == (GRID_SIZE, 0):
+            rot_head = pygame.transform.flip(MOUSE_IMG, True, False)
+        elif direction == (0, -GRID_SIZE):
+            rot_head = pygame.transform.rotate(MOUSE_IMG, 270)
+        elif direction == (0, GRID_SIZE):
+            rot_head = pygame.transform.rotate(MOUSE_IMG, 90)
+            
+        screen.blit(rot_head, (hx, hy))
+    else:
+        pygame.draw.circle(screen, RAT_GRAY, (hx + GRID_SIZE // 2, hy + GRID_SIZE // 2), GRID_SIZE // 2)
+
+cheese_pos = [400, 280]
+rat = [[200, 200], [160, 200], [120, 200]]
+rat_dir = (GRID_SIZE, 0)
+score = 0
+
+is_running = True
+is_paused = False
+
+while is_running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            is_running = False
+            
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_p:
+                is_paused = not is_paused
+
+            if not is_paused:
+                if event.key == pygame.K_UP and rat_dir != (0, GRID_SIZE):
+                    rat_dir = (0, -GRID_SIZE)
+                elif event.key == pygame.K_DOWN and rat_dir != (0, -GRID_SIZE):
+                    rat_dir = (0, GRID_SIZE)
+                elif event.key == pygame.K_LEFT and rat_dir != (GRID_SIZE, 0):
+                    rat_dir = (-GRID_SIZE, 0)
+                elif event.key == pygame.K_RIGHT and rat_dir != (-GRID_SIZE, 0):
+                    rat_dir = (GRID_SIZE, 0)
+
+    if not is_paused:
+        new_head = [rat[0][0] + rat_dir[0], rat[0][1] + rat_dir[1]]
+        rat.insert(0, new_head)
+
+        if new_head == cheese_pos:
+            score += 1
+            cheese_pos = [
+                random.randint(0, (WIDTH - GRID_SIZE) // GRID_SIZE) * GRID_SIZE,
+                random.randint(0, (HEIGHT - GRID_SIZE) // GRID_SIZE) * GRID_SIZE
+            ]
+        else:
+            rat.pop()
+
+    draw_background()
+    draw_cheese(cheese_pos)
+    draw_rat(rat, rat_dir)
+
+    score_surface = font.render(f"Score: {score}", True, WHITE)
+    screen.blit(score_surface, (15, 15))
+
+    if is_paused:
+        pause_surface = big_font.render("PAUSED", True, WHITE)
+        screen.blit(pause_surface, (WIDTH // 2 - 80, HEIGHT // 2 - 30))
+
+    pygame.display.flip()
+    clock.tick(5)
+
+pygame.quit()
+sys.exit()
