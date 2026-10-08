@@ -4,175 +4,523 @@ import os
 import random
 
 pygame.init()
-pygame.mixer.init()
 
-WIDTH, HEIGHT = 800, 600
-GRID_SIZE = 40
+WIDTH, HEIGHT = 960, 960
 
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Rat Attack - TERRA Game")
 
+# ---------- Settings you can tweak ----------
+SIZES = [48, 60, 80, 96, 120]   # cell sizes the slider can pick (all divide 960 evenly)
+POINTS = [1, 2, 3, 4, 5]        # points per cheese for each size (bigger = harder = more)
+MAX_BANANAS = 20
+MOVE_INTERVAL = 200             # ms between rat steps (lower = faster rat)
+
+TRAIN_CELLS = 5                 # train length in cells
+TRAIN_SPEED = 900               # train speed in pixels per second
+SLIDE_MS = 1000                 # track slide in / slide out time
+WARN_MS = 1500                  # red flashing warning before the train comes
+TRAIN_WAIT = (6000, 12000)      # random wait (ms) between train events
+FIRST_TRAIN_WAIT = (5000, 9000) # wait (ms) before the first train
+
+# ---------- Colors ----------
 BG_DARK = (25, 20, 20)
 BG_LIGHT = (35, 28, 28)
 RAT_GRAY = (120, 120, 120)
 PINK = (255, 182, 193)
 WHITE = (255, 255, 255)
 CHEESE_YELLOW = (255, 255, 102)
+BANANA_YELLOW = (255, 220, 0)
 
 clock = pygame.time.Clock()
 font = pygame.font.SysFont("monospace", 28, bold=True)
+small_font = pygame.font.SysFont("monospace", 22, bold=True)
 big_font = pygame.font.SysFont("monospace", 48, bold=True)
 
-def load_tile(filename):
+
+# ---------- Image loading ----------
+def load_raw(filename):
     if os.path.exists(filename):
         try:
-            raw_img = pygame.image.load(filename).convert_alpha()
-            raw_img.set_colorkey((255, 255, 255))
-            return pygame.transform.scale(raw_img, (GRID_SIZE, GRID_SIZE)), True
+            return pygame.image.load(filename).convert()
         except pygame.error:
-            return None, False
-    return None, False
+            return None
+    return None
 
-CHEESE_IMG, HAS_CHEESE_IMG = load_tile("cheese.png")
-MOUSE_IMG, HAS_MOUSE_IMG   = load_tile("mouse.png")
-BODY_IMG, HAS_BODY_IMG     = load_tile("body.png")
-TAIL_IMG, HAS_TAIL_IMG     = load_tile("tail.png")
 
-HAS_FULL_BG, HAS_TILE_BG = False, False
-if os.path.exists("background.png"):
-    raw_bg = pygame.image.load("background.png").convert()
-    BG_IMG = pygame.transform.scale(raw_bg, (WIDTH, HEIGHT))
-    HAS_FULL_BG = True
-elif os.path.exists("tile.png"):
-    TILE_IMG, HAS_TILE_BG = load_tile("tile.png")
+def scaled(raw, w, h):
+    """Scale a raw image and make its pure-white background transparent."""
+    if raw is None:
+        return None
+    img = pygame.transform.scale(raw, (w, h))
+    img.set_colorkey((255, 255, 255))
+    return img
+
+
+RAW = {name: load_raw(name + ".png")
+       for name in ("cheese", "mouse", "body", "tail", "banana", "dead", "train", "track")}
+
+raw_bg = load_raw("background.png")
+BG_IMG = pygame.transform.scale(raw_bg, (WIDTH, HEIGHT)) if raw_bg else None
+
+GRID_SIZE = 80
+IMG = {}
+
+
+def apply_size(size):
+    """Set the cell size and rescale every sprite to it."""
+    global GRID_SIZE, IMG
+    GRID_SIZE = size
+    IMG = {n: scaled(RAW[n], size, size)
+           for n in ("cheese", "mouse", "body", "tail", "banana", "dead", "track")}
+    IMG["train"] = scaled(RAW["train"], TRAIN_CELLS * size, size)
+
+
+apply_size(GRID_SIZE)
+
+
+# ---------- Game state ----------
+rat = []
+rat_dir = next_dir = (GRID_SIZE, 0)
+cheese_pos = [0, 0]
+bananas = []
+score = 0
+game_over = False
+is_paused = False
+size_idx = 2
+points_per_food = POINTS[size_idx]
+train = None          # the current train event (a dict) or None
+next_train_in = 0
+
+
+# ---------- Drawing ----------
+def draw_text(text, fnt, y, color=WHITE):
+    surf = fnt.render(text, True, color)
+    screen.blit(surf, surf.get_rect(center=(WIDTH // 2, y)))
+
 
 def draw_background():
-    if HAS_FULL_BG:
+    if BG_IMG:
         screen.blit(BG_IMG, (0, 0))
-    elif HAS_TILE_BG:
-        for row in range(0, HEIGHT // GRID_SIZE):
-            for col in range(0, WIDTH // GRID_SIZE):
-                screen.blit(TILE_IMG, (col * GRID_SIZE, row * GRID_SIZE))
     else:
-        for row in range(0, HEIGHT // GRID_SIZE):
-            for col in range(0, WIDTH // GRID_SIZE):
+        for row in range(HEIGHT // GRID_SIZE):
+            for col in range(WIDTH // GRID_SIZE):
                 color = BG_DARK if (row + col) % 2 == 0 else BG_LIGHT
                 pygame.draw.rect(screen, color, (col * GRID_SIZE, row * GRID_SIZE, GRID_SIZE, GRID_SIZE))
 
+
 def draw_cheese(pos):
-    if HAS_CHEESE_IMG:
-        screen.blit(CHEESE_IMG, (pos[0], pos[1]))
+    if IMG["cheese"]:
+        screen.blit(IMG["cheese"], (pos[0], pos[1]))
     else:
         pygame.draw.rect(screen, CHEESE_YELLOW, (pos[0], pos[1], GRID_SIZE, GRID_SIZE))
 
+
+def draw_banana(pos):
+    if IMG["banana"]:
+        screen.blit(IMG["banana"], (pos[0], pos[1]))
+    else:
+        pygame.draw.rect(screen, BANANA_YELLOW, (pos[0], pos[1], GRID_SIZE, GRID_SIZE))
+
+
 def draw_rat(rat, direction):
+    # Tail
     if len(rat) > 1:
         tail_pos = rat[-1]
         second_last = rat[-2]
-        
         dx = tail_pos[0] - second_last[0]
         dy = tail_pos[1] - second_last[1]
-        
-        if HAS_TAIL_IMG:
-            rot_body = pygame.transform.flip(BODY_IMG, True, False)
-            
+
+        if IMG["tail"]:
             if dx > 0:
-                rot_tail = TAIL_IMG
+                rot_tail = IMG["tail"]
             elif dx < 0:
-                rot_tail = pygame.transform.rotate(TAIL_IMG, 180)
+                rot_tail = pygame.transform.rotate(IMG["tail"], 180)
             elif dy < 0:
-                rot_tail = pygame.transform.rotate(TAIL_IMG, 90)
+                rot_tail = pygame.transform.rotate(IMG["tail"], 90)
             else:
-                rot_tail = pygame.transform.rotate(TAIL_IMG, 270)
+                rot_tail = pygame.transform.rotate(IMG["tail"], 270)
             screen.blit(rot_tail, (tail_pos[0], tail_pos[1]))
         else:
             tx, ty = tail_pos[0] + GRID_SIZE // 2, tail_pos[1] + GRID_SIZE // 2
             pygame.draw.line(screen, PINK, (tx, ty), (tx + dx // 2, ty + dy // 2), 5)
 
+    # Body
     for i in range(1, len(rat) - 1):
         segment = rat[i]
         prev_segment = rat[i - 1]
-        
-        if HAS_BODY_IMG:
+
+        if IMG["body"]:
+            # Direction from this segment toward the head. body.png faces LEFT.
+            seg_dx = prev_segment[0] - segment[0]
             seg_dy = prev_segment[1] - segment[1]
-            if seg_dy != 0:
-                rot_body = pygame.transform.flip(BODY_IMG, True, False)
-                rot_body = pygame.transform.rotate(BODY_IMG, 270)
+            if seg_dx < 0:
+                rot_body = IMG["body"]
+            elif seg_dx > 0:
+                rot_body = pygame.transform.flip(IMG["body"], True, False)
+            elif seg_dy > 0:
+                rot_body = pygame.transform.rotate(IMG["body"], 90)
             else:
-                rot_body = BODY_IMG
+                rot_body = pygame.transform.rotate(IMG["body"], 270)
             screen.blit(rot_body, (segment[0], segment[1]))
         else:
             cx, cy = segment[0] + GRID_SIZE // 2, segment[1] + GRID_SIZE // 2
             pygame.draw.circle(screen, RAT_GRAY, (cx, cy), GRID_SIZE // 2 - 2)
 
+    # Head (dead sprite whenever the game is over)
     hx, hy = rat[0][0], rat[0][1]
-    if HAS_MOUSE_IMG:
-        if direction == (-GRID_SIZE, 0):
-            rot_head = MOUSE_IMG
-        elif direction == (GRID_SIZE, 0):
-            rot_head = pygame.transform.flip(MOUSE_IMG, True, False)
+    head_img = IMG["dead"] if (game_over and IMG["dead"]) else IMG["mouse"]
+    if head_img is not None:
+        rot_head = head_img
+        if direction == (GRID_SIZE, 0):
+            rot_head = pygame.transform.flip(head_img, True, False)
         elif direction == (0, -GRID_SIZE):
-            rot_head = pygame.transform.rotate(MOUSE_IMG, 270)
+            rot_head = pygame.transform.rotate(head_img, 270)
         elif direction == (0, GRID_SIZE):
-            rot_head = pygame.transform.rotate(MOUSE_IMG, 90)
-            
+            rot_head = pygame.transform.rotate(head_img, 90)
         screen.blit(rot_head, (hx, hy))
     else:
         pygame.draw.circle(screen, RAT_GRAY, (hx + GRID_SIZE // 2, hy + GRID_SIZE // 2), GRID_SIZE // 2)
 
-cheese_pos = [400, 280]
-rat = [[200, 200], [160, 200], [120, 200]]
-rat_dir = (GRID_SIZE, 0)
-score = 0
 
-is_running = True
-is_paused = False
+# ---------- Train event ----------
+def new_train():
+    horizontal = random.choice([True, False])
+    count = (HEIGHT if horizontal else WIDTH) // GRID_SIZE
+    return {
+        "horizontal": horizontal,          # True = runs left/right, False = up/down
+        "index": random.randrange(count),  # which row (or column) the track is on
+        "forward": random.choice([True, False]),  # True = right / down
+        "phase": "slide_in",               # slide_in -> warning -> train -> slide_out
+        "t": 0,                            # ms spent in this phase
+        "pos": 0.0,                        # train position in pixels
+    }
 
-while is_running:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            is_running = False
-            
-        elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_p:
-                is_paused = not is_paused
 
-            if not is_paused:
-                if event.key == pygame.K_UP and rat_dir != (0, GRID_SIZE):
-                    rat_dir = (0, -GRID_SIZE)
-                elif event.key == pygame.K_DOWN and rat_dir != (0, -GRID_SIZE):
-                    rat_dir = (0, GRID_SIZE)
-                elif event.key == pygame.K_LEFT and rat_dir != (GRID_SIZE, 0):
-                    rat_dir = (-GRID_SIZE, 0)
-                elif event.key == pygame.K_RIGHT and rat_dir != (-GRID_SIZE, 0):
-                    rat_dir = (GRID_SIZE, 0)
+def update_train(dt):
+    global train, next_train_in
+    if train is None:
+        next_train_in -= dt
+        if next_train_in <= 0:
+            train = new_train()
+        return
 
-    if not is_paused:
-        new_head = [rat[0][0] + rat_dir[0], rat[0][1] + rat_dir[1]]
-        rat.insert(0, new_head)
+    train["t"] += dt
+    phase = train["phase"]
+    length = TRAIN_CELLS * GRID_SIZE
+    span = WIDTH if train["horizontal"] else HEIGHT
 
-        if new_head == cheese_pos:
-            score += 1
-            cheese_pos = [
-                random.randint(0, (WIDTH - GRID_SIZE) // GRID_SIZE) * GRID_SIZE,
-                random.randint(0, (HEIGHT - GRID_SIZE) // GRID_SIZE) * GRID_SIZE
-            ]
+    if phase == "slide_in" and train["t"] >= SLIDE_MS:
+        train["phase"], train["t"] = "warning", 0
+    elif phase == "warning" and train["t"] >= WARN_MS:
+        train["phase"], train["t"] = "train", 0
+        train["pos"] = -length if train["forward"] else span
+    elif phase == "train":
+        move = TRAIN_SPEED * dt / 1000
+        train["pos"] += move if train["forward"] else -move
+        if (train["forward"] and train["pos"] > span) or (not train["forward"] and train["pos"] < -length):
+            train["phase"], train["t"] = "slide_out", 0
+    elif phase == "slide_out" and train["t"] >= SLIDE_MS:
+        train = None
+        next_train_in = random.randint(*TRAIN_WAIT)
+
+
+def train_rect():
+    length = TRAIN_CELLS * GRID_SIZE
+    if train["horizontal"]:
+        return pygame.Rect(int(train["pos"]), train["index"] * GRID_SIZE, length, GRID_SIZE)
+    return pygame.Rect(train["index"] * GRID_SIZE, int(train["pos"]), GRID_SIZE, length)
+
+
+def train_hits_rat():
+    tr = train_rect()
+    for seg in rat:
+        cell = pygame.Rect(seg[0], seg[1], GRID_SIZE, GRID_SIZE).inflate(-GRID_SIZE // 5, -GRID_SIZE // 5)
+        if tr.colliderect(cell):
+            return True
+    return False
+
+
+def draw_track_tile(x, y, horizontal):
+    G = GRID_SIZE
+    img = IMG["track"]
+    if img is not None:
+        if not horizontal:
+            img = pygame.transform.rotate(img, 90)
+        screen.blit(img, (x, y))
+        return
+    rail = max(3, G // 16)
+    pygame.draw.rect(screen, (70, 55, 40), (x, y, G, G))
+    tie = (101, 67, 33)
+    steel = (170, 170, 170)
+    if horizontal:
+        pygame.draw.rect(screen, tie, (x + int(G * 0.35), y + 3, int(G * 0.3), G - 6))
+        pygame.draw.rect(screen, steel, (x, y + int(G * 0.2), G, rail))
+        pygame.draw.rect(screen, steel, (x, y + int(G * 0.8) - rail, G, rail))
+    else:
+        pygame.draw.rect(screen, tie, (x + 3, y + int(G * 0.35), G - 6, int(G * 0.3)))
+        pygame.draw.rect(screen, steel, (x + int(G * 0.2), y, rail, G))
+        pygame.draw.rect(screen, steel, (x + int(G * 0.8) - rail, y, rail, G))
+
+
+def draw_track():
+    G = GRID_SIZE
+    phase = train["phase"]
+    if phase == "slide_in":
+        p = min(train["t"] / SLIDE_MS, 1)
+    elif phase == "slide_out":
+        p = 1 - min(train["t"] / SLIDE_MS, 1)
+    else:
+        p = 1
+
+    blink = phase == "warning" and (train["t"] // 250) % 2 == 0
+
+    if train["horizontal"]:
+        ox = int((p - 1) * WIDTH)
+        y = train["index"] * G
+        for col in range(WIDTH // G):
+            draw_track_tile(col * G + ox, y, True)
+        if blink:
+            overlay = pygame.Surface((WIDTH, G), pygame.SRCALPHA)
+            overlay.fill((255, 0, 0, 90))
+            screen.blit(overlay, (0, y))
+    else:
+        oy = int((p - 1) * HEIGHT)
+        x = train["index"] * G
+        for row in range(HEIGHT // G):
+            draw_track_tile(x, row * G + oy, False)
+        if blink:
+            overlay = pygame.Surface((G, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((255, 0, 0, 90))
+            screen.blit(overlay, (x, 0))
+
+
+def draw_train():
+    tr = train_rect()
+    img = IMG["train"]
+    if img is not None:
+        # train.png is assumed to face RIGHT
+        if train["horizontal"]:
+            if not train["forward"]:
+                img = pygame.transform.flip(img, True, False)
         else:
-            rat.pop()
+            img = pygame.transform.rotate(img, 270 if train["forward"] else 90)
+        screen.blit(img, tr.topleft)
+        return
 
-    draw_background()
-    draw_cheese(cheese_pos)
-    draw_rat(rat, rat_dir)
+    front = TRAIN_CELLS - 1 if train["forward"] else 0
+    for i in range(TRAIN_CELLS):
+        if train["horizontal"]:
+            cell = pygame.Rect(tr.x + i * GRID_SIZE, tr.y, GRID_SIZE, GRID_SIZE)
+        else:
+            cell = pygame.Rect(tr.x, tr.y + i * GRID_SIZE, GRID_SIZE, GRID_SIZE)
+        color = (200, 60, 60) if i == front else (150, 30, 30)
+        pygame.draw.rect(screen, color, cell.inflate(-4, -4), border_radius=6)
+        pygame.draw.circle(screen, (255, 230, 120), cell.center, max(4, GRID_SIZE // 10))
 
-    score_surface = font.render(f"Score: {score}", True, WHITE)
-    screen.blit(score_surface, (15, 15))
 
-    if is_paused:
-        pause_surface = big_font.render("PAUSED", True, WHITE)
-        screen.blit(pause_surface, (WIDTH // 2 - 80, HEIGHT // 2 - 30))
+# ---------- Spawning / reset ----------
+def spawn_cheese():
+    while True:
+        pos = [random.randint(0, WIDTH // GRID_SIZE - 1) * GRID_SIZE,
+               random.randint(0, HEIGHT // GRID_SIZE - 1) * GRID_SIZE]
+        if pos not in rat and pos not in bananas:
+            return pos
 
-    pygame.display.flip()
-    clock.tick(5)
 
-pygame.quit()
-sys.exit()
+def spawn_banana():
+    while True:
+        pos = [random.randint(0, WIDTH // GRID_SIZE - 1) * GRID_SIZE,
+               random.randint(0, HEIGHT // GRID_SIZE - 1) * GRID_SIZE]
+        if pos not in rat and pos != cheese_pos and pos not in bananas:
+            return pos
+
+
+def reset():
+    global rat, rat_dir, next_dir, score, cheese_pos, game_over, bananas
+    global is_paused, train, next_train_in
+    G = GRID_SIZE
+    rat = [[3 * G, 3 * G], [2 * G, 3 * G], [1 * G, 3 * G]]
+    rat_dir = next_dir = (G, 0)
+    score = 0
+    game_over = False
+    is_paused = False
+    bananas = []
+    train = None
+    next_train_in = random.randint(*FIRST_TRAIN_WAIT)
+    cheese_pos = spawn_cheese()
+
+
+# ---------- Start screen ----------
+def start_screen(idx):
+    slider = pygame.Rect(200, 640, 560, 10)
+    start_btn = pygame.Rect(WIDTH // 2 - 130, 780, 260, 70)
+    dim = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    dim.fill((0, 0, 0, 150))
+    dragging = False
+    last = len(SIZES) - 1
+
+    while True:
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif ev.type == pygame.KEYDOWN:
+                if ev.key == pygame.K_LEFT:
+                    idx = max(0, idx - 1)
+                elif ev.key == pygame.K_RIGHT:
+                    idx = min(last, idx + 1)
+                elif ev.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    return idx
+                elif ev.key == pygame.K_ESCAPE:
+                    pygame.quit()
+                    sys.exit()
+            elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                if start_btn.collidepoint(ev.pos):
+                    return idx
+                if slider.inflate(40, 60).collidepoint(ev.pos):
+                    dragging = True
+            elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+                dragging = False
+
+        if dragging:
+            frac = (pygame.mouse.get_pos()[0] - slider.left) / slider.width
+            idx = max(0, min(last, round(frac * last)))
+
+        # draw
+        if BG_IMG:
+            screen.blit(BG_IMG, (0, 0))
+        else:
+            screen.fill(BG_DARK)
+        screen.blit(dim, (0, 0))
+
+        draw_text("RAT ATTACK", big_font, 120)
+        draw_text("Eat the cheese. Avoid bananas. Watch the tracks!", small_font, 180)
+
+        size = SIZES[idx]
+        preview = scaled(RAW["mouse"], size, size)
+        if preview:
+            screen.blit(preview, preview.get_rect(center=(WIDTH // 2, 340)))
+        else:
+            pygame.draw.circle(screen, RAT_GRAY, (WIDTH // 2, 340), size // 2)
+
+        draw_text(f"Rat size: {size}px   Grid: {WIDTH // size} x {HEIGHT // size}", font, 520)
+        draw_text(f"Points per cheese: {POINTS[idx]}", font, 570, CHEESE_YELLOW)
+
+        pygame.draw.rect(screen, (90, 90, 90), slider, border_radius=5)
+        for i in range(len(SIZES)):
+            nx = slider.left + int(i * slider.width / last)
+            pygame.draw.line(screen, WHITE, (nx, slider.top - 10), (nx, slider.bottom + 10), 2)
+        hx = slider.left + int(idx * slider.width / last)
+        pygame.draw.circle(screen, CHEESE_YELLOW, (hx, slider.centery), 18)
+        pygame.draw.circle(screen, (60, 60, 60), (hx, slider.centery), 18, 3)
+        screen.blit(small_font.render("small", True, WHITE), (slider.left - 20, slider.bottom + 30))
+        big_label = small_font.render("big", True, WHITE)
+        screen.blit(big_label, (slider.right - big_label.get_width() + 20, slider.bottom + 30))
+
+        pygame.draw.rect(screen, (60, 140, 60), start_btn, border_radius=12)
+        pygame.draw.rect(screen, WHITE, start_btn, 3, border_radius=12)
+        draw_text("START", font, start_btn.centery)
+
+        draw_text("Drag the slider or use LEFT / RIGHT, then ENTER", small_font, 900)
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
+# ---------- Game loop ----------
+def play():
+    global is_paused, game_over, rat_dir, next_dir, score, cheese_pos
+
+    reset()
+    move_timer = 0
+
+    while True:
+        dt = clock.tick(60)
+
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+            elif ev.type == pygame.KEYDOWN:
+                if ev.key == pygame.K_p and not game_over:
+                    is_paused = not is_paused
+
+                if game_over and ev.key == pygame.K_r:
+                    reset()
+                    move_timer = 0
+
+                if ev.key == pygame.K_m and (game_over or is_paused):
+                    return  # back to the start screen
+
+                if not is_paused and not game_over:
+                    # Compare against rat_dir (the direction used on the last step)
+                    # so two quick key presses can't reverse the rat into itself.
+                    if ev.key == pygame.K_UP and rat_dir != (0, GRID_SIZE):
+                        next_dir = (0, -GRID_SIZE)
+                    elif ev.key == pygame.K_DOWN and rat_dir != (0, -GRID_SIZE):
+                        next_dir = (0, GRID_SIZE)
+                    elif ev.key == pygame.K_LEFT and rat_dir != (GRID_SIZE, 0):
+                        next_dir = (-GRID_SIZE, 0)
+                    elif ev.key == pygame.K_RIGHT and rat_dir != (-GRID_SIZE, 0):
+                        next_dir = (GRID_SIZE, 0)
+
+        if not is_paused and not game_over:
+            update_train(dt)
+
+            move_timer += dt
+            if move_timer >= MOVE_INTERVAL:
+                move_timer -= MOVE_INTERVAL
+                rat_dir = next_dir
+                new_head = [rat[0][0] + rat_dir[0], rat[0][1] + rat_dir[1]]
+
+                hit_wall = not (0 <= new_head[0] < WIDTH and 0 <= new_head[1] < HEIGHT)
+                hit_self = new_head in rat[:-1]
+
+                if hit_wall or hit_self:
+                    game_over = True
+                else:
+                    rat.insert(0, new_head)
+                    rat.pop()  # the rat never grows
+                    if new_head in bananas:
+                        game_over = True
+                    elif new_head == cheese_pos:
+                        score += points_per_food
+                        cheese_pos = spawn_cheese()
+                        if len(bananas) < MAX_BANANAS and random.random() < 0.6:
+                            bananas.append(spawn_banana())
+
+            # The train is checked every frame, not only on rat steps
+            if train is not None and train["phase"] == "train" and train_hits_rat():
+                game_over = True
+
+        draw_background()
+        if train is not None:
+            draw_track()
+        draw_cheese(cheese_pos)
+        for b in bananas:
+            draw_banana(b)
+        draw_rat(rat, rat_dir)
+        if train is not None and train["phase"] == "train":
+            draw_train()
+
+        screen.blit(font.render(f"Score: {score}", True, WHITE), (15, 15))
+        screen.blit(small_font.render(f"+{points_per_food} per cheese", True, CHEESE_YELLOW), (15, 52))
+
+        if is_paused:
+            draw_text("PAUSED", big_font, HEIGHT // 2)
+            draw_text("P = resume   M = menu", font, HEIGHT // 2 + 60)
+        if game_over:
+            draw_text("GAME OVER", big_font, HEIGHT // 2 - 30)
+            draw_text("R = restart   M = menu", font, HEIGHT // 2 + 30)
+
+        pygame.display.flip()
+
+
+# ---------- Main ----------
+while True:
+    size_idx = start_screen(size_idx)
+    apply_size(SIZES[size_idx])
+    points_per_food = POINTS[size_idx]
+    play()
