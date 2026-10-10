@@ -38,6 +38,12 @@ CHEESE_YELLOW = (255, 255, 102)
 BANANA_YELLOW = (255, 220, 0)
 CHILLI_RED = (255, 50, 50)
 
+# Arrow keys + WASD (QWERTY) + ZQSD (AZERTY)
+KEYS_UP = (pygame.K_UP, pygame.K_w, pygame.K_z)
+KEYS_DOWN = (pygame.K_DOWN, pygame.K_s)
+KEYS_LEFT = (pygame.K_LEFT, pygame.K_a, pygame.K_q)
+KEYS_RIGHT = (pygame.K_RIGHT, pygame.K_d)
+
 clock = pygame.time.Clock()
 font = pygame.font.SysFont("monospace", 28, bold=True)
 small_font = pygame.font.SysFont("monospace", 22, bold=True)
@@ -463,9 +469,9 @@ async def start_screen(idx):
                 pygame.quit()
                 sys.exit()
             elif ev.type == pygame.KEYDOWN:
-                if ev.key == pygame.K_LEFT:
+                if ev.key in KEYS_LEFT:
                     idx = max(0, idx - 1)
-                elif ev.key == pygame.K_RIGHT:
+                elif ev.key in KEYS_RIGHT:
                     idx = min(last, idx + 1)
                 elif ev.key in (pygame.K_RETURN, pygame.K_SPACE):
                     return idx
@@ -518,7 +524,7 @@ async def start_screen(idx):
         pygame.draw.rect(screen, WHITE, start_btn, 3, border_radius=12)
         draw_text("START", font, start_btn.centery)
 
-        draw_text("Drag the slider or use LEFT / RIGHT, then ENTER", small_font, 900)
+        draw_text("Drag the slider or use LEFT / RIGHT (A/D/Q), then ENTER", small_font, 900)
 
         pygame.display.flip()
         clock.tick(30)
@@ -610,13 +616,13 @@ async def play():
                     return
 
                 if not is_paused and not game_over:
-                    if ev.key == pygame.K_UP and rat_dir != (0, GRID_SIZE):
+                    if ev.key in KEYS_UP and rat_dir != (0, GRID_SIZE):
                         next_dir = (0, -GRID_SIZE)
-                    elif ev.key == pygame.K_DOWN and rat_dir != (0, -GRID_SIZE):
+                    elif ev.key in KEYS_DOWN and rat_dir != (0, -GRID_SIZE):
                         next_dir = (0, GRID_SIZE)
-                    elif ev.key == pygame.K_LEFT and rat_dir != (GRID_SIZE, 0):
+                    elif ev.key in KEYS_LEFT and rat_dir != (GRID_SIZE, 0):
                         next_dir = (-GRID_SIZE, 0)
-                    elif ev.key == pygame.K_RIGHT and rat_dir != (-GRID_SIZE, 0):
+                    elif ev.key in KEYS_RIGHT and rat_dir != (-GRID_SIZE, 0):
                         next_dir = (GRID_SIZE, 0)
 
         if not is_paused and not game_over:
@@ -745,6 +751,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
+#py -3.12 -m pygbag .
