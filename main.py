@@ -9,11 +9,11 @@ import json
 
 pygame.init()
 pygame.mixer.init()
-
+# screen size
 WIDTH, HEIGHT = 960, 960
-
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Ratticus Strikes Again - TERRA Game")
+window = pygame.display.set_mode((WIDTH, HEIGHT))
+screen = pygame.Surface((WIDTH, HEIGHT))
+pygame.display.set_caption("Ratticus tax evasion - TERRA project")
 
 SIZES = [48, 60, 80, 96, 120]
 POINTS = [1, 2, 3, 4, 5]
@@ -22,10 +22,10 @@ BASE_MOVE_INTERVAL = 200
 BOOST_MOVE_INTERVAL = 100
 BOOST_DURATION = 5000
 
-TRAIN_CELLS = 5
-TRAIN_SPEED = 900
+TRAIN_CELLS = 10
+TRAIN_SPEED = 600
 SLIDE_MS = 1000
-WARN_MS = 1500
+WARN_MS = 1000
 TRAIN_WAIT = (6000, 12000)
 FIRST_TRAIN_WAIT = (5000, 9000)
 
@@ -38,7 +38,7 @@ CHEESE_YELLOW = (255, 255, 102)
 BANANA_YELLOW = (255, 220, 0)
 CHILLI_RED = (255, 50, 50)
 
-# Arrow keys + WASD (QWERTY) + ZQSD (AZERTY)
+#movement keybinds[rebind at will] base are (wasd, zqsd and arrow keys)
 KEYS_UP = (pygame.K_UP, pygame.K_w, pygame.K_z)
 KEYS_DOWN = (pygame.K_DOWN, pygame.K_s)
 KEYS_LEFT = (pygame.K_LEFT, pygame.K_a, pygame.K_q)
@@ -104,7 +104,6 @@ BG_IMG = pygame.transform.scale(raw_bg, (WIDTH, HEIGHT)) if raw_bg else None
 GRID_SIZE = 80
 IMG = {}
 
-
 def apply_size(size):
     global GRID_SIZE, IMG
     GRID_SIZE = size
@@ -122,6 +121,9 @@ bananas = []
 particles = []
 chilli_pos = None
 chilli_timer = 0
+shake_timer =  0
+shake_total = 1
+shake_strength = 0
 shield_pos = None
 has_shield = False
 highscore = load_high_score()
@@ -147,6 +149,21 @@ def draw_background():
             for col in range(WIDTH // GRID_SIZE):
                 color = BG_DARK if (row + col) % 2 == 0 else BG_LIGHT
                 pygame.draw.rect(screen, color, (col * GRID_SIZE, row * GRID_SIZE, GRID_SIZE, GRID_SIZE))
+
+def start_shake(ms = 400, strength = 12):
+    global shake_timer, shake_total, shake_strength
+    shake_timer = shake_total = ms
+    shake_strength = strength
+
+def present():
+    ox = oy = 0
+    if shake_timer > 0:
+        amount = int(shake_strength * shake_timer / shake_total)
+        ox = random.randint(-amount, amount)
+        oy = random.randint(-amount, amount)
+    window.fill((0, 0, 0))
+    window.blit(screen, (ox, oy))
+    pygame.display.flip()
 
 
 def draw_cheese(pos):
@@ -439,10 +456,12 @@ def spawn_chilli():
 def reset():
     global rat, rat_dir, next_dir, score, cheese_pos, game_over, bananas
     global is_paused, train, next_train_in, has_shield, shield_pos, chilli_pos, chilli_timer
+    global shake_timer
     G = GRID_SIZE
     rat = [[3 * G, 3 * G], [2 * G, 3 * G], [1 * G, 3 * G]]
     rat_dir = next_dir = (G, 0)
     score = 0
+    shake_timer = 0
     game_over = False
     has_shield = False
     shield_pos = None
@@ -496,7 +515,7 @@ async def start_screen(idx):
             screen.fill(BG_DARK)
         screen.blit(dim, (0, 0))
 
-        draw_text("RATTICUS STRIKES AGAIN", big_font, 120)
+        draw_text("RATTICUS EVADES TAXES", big_font, 120)
         draw_text("Eat the cheese. Avoid bananas. Watch the tracks!", small_font, 180)
 
         size = SIZES[idx]
@@ -526,7 +545,8 @@ async def start_screen(idx):
 
         draw_text("Drag the slider or use LEFT / RIGHT (A/D/Q), then ENTER", small_font, 900)
 
-        pygame.display.flip()
+        present()
+        #change this value to make game faster / slower
         clock.tick(30)
         await asyncio.sleep(0)
 
@@ -538,7 +558,7 @@ async def win_screen():
 
     monologue = [
         "SQUEAK! 100 POINTS?!",
-        "Ratticus reigns supreme...",
+        "Ratticus reigns ...",
         "I AM THE CHEESE KING!",
         "Press ENTER to return to Menu"
     ]
@@ -585,13 +605,13 @@ async def win_screen():
             fnt = font if i < 3 else small_font
             draw_text(line, fnt, y_start + (i * 60), color)
 
-        pygame.display.flip()
+        present()
         await asyncio.sleep(0)
 
 
 async def play():
     global is_paused, game_over, rat_dir, next_dir, score, cheese_pos
-    global has_shield, shield_pos, chilli_pos, chilli_timer
+    global has_shield, shield_pos, chilli_pos, chilli_timer, shake_timer
 
     reset()
     move_timer = 0
@@ -625,6 +645,9 @@ async def play():
                     elif ev.key in KEYS_RIGHT and rat_dir != (-GRID_SIZE, 0):
                         next_dir = (GRID_SIZE, 0)
 
+        if shake_timer > 0:
+            shake_timer -= dt
+
         if not is_paused and not game_over:
             update_train(dt)
 
@@ -649,6 +672,7 @@ async def play():
                         has_shield = False
                     else:
                         game_over = True
+                        start_shake(450, 14)
                         if SOUNDS["dead"]:
                             SOUNDS["dead"].play()
                 else:
@@ -671,6 +695,7 @@ async def play():
                             bananas.remove(new_head)
                         else:
                             game_over = True
+                            start_shake(450, 14)
                             if SOUNDS["wrong"]:
                                 SOUNDS["wrong"].play()
 
@@ -705,6 +730,7 @@ async def play():
                         has_shield = False
                     else:
                         game_over = True
+                        start_shake(450, 14)
                         if SOUNDS["dead"]:
                             SOUNDS["dead"].play()
 
@@ -737,7 +763,7 @@ async def play():
             draw_text("GAME OVER", big_font, HEIGHT // 2 - 30)
             draw_text("R = restart   M = menu", font, HEIGHT // 2 + 30)
 
-        pygame.display.flip()
+        present()
         await asyncio.sleep(0)
 
 
